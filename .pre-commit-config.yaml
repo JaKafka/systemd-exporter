@@ -1,0 +1,47 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: https://github.com/editorconfig-checker/editorconfig-checker.python
+    rev: 3.2.1
+    hooks:
+      - id: editorconfig-checker
+        alias: ec
+
+  - repo: local
+    hooks:
+      - id: go-fmt
+        name: go fmt
+        entry: gofmt
+        args: [-l, -w]
+        language: system
+        types: [go]
+      - id: go-vet
+        name: go vet
+        entry: go
+        args: [vet, ./...]
+        language: system
+        pass_filenames: false
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: go
+        args: [mod, tidy]
+        language: system
+        pass_filenames: false
+      - id: go-test
+        name: go test
+        entry: go
+        args: [test, ./...]
+        language: system
+        pass_filenames: false
+
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.1.6
+    hooks:
+      - id: golangci-lint
