@@ -8,9 +8,6 @@
 //
 // By default the collector tracks all unit types. Use [WithUnitType] or
 // [WithNameFilter] to restrict collection to a subset.
-//
-// Log access is available through the standalone [GetServiceLogs] function,
-// which reads directly from the systemd journal.
 package systemd
 
 import "time"
@@ -83,16 +80,4 @@ type Snapshot struct {
 	Stats Stats
 	// UpdatedAt is the wall-clock time when this snapshot was last rebuilt.
 	UpdatedAt time.Time
-}
-
-// LogEntry represents a single entry read from the systemd journal.
-type LogEntry struct {
-	// Timestamp is the wall-clock time the entry was recorded.
-	Timestamp time.Time
-	// Priority is the syslog priority level (0 = emerg … 7 = debug).
-	Priority int
-	// Message is the log message text.
-	Message string
-	// Unit is the originating unit name.
-	Unit string
 }

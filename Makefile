@@ -1,18 +1,14 @@
 BIN    := systemd-exporter
 MODULE := github.com/JaKafka/systemd-exporter
 
-.PHONY: all build build-journal test test-integration lint clean tidy
+.PHONY: all build test test-integration lint clean tidy
 
 ## Run tidy, lint, clean, build and unit tests.
 all: tidy lint clean build test
 
-## Compile the binary to bin/systemd-exporter (journal support disabled).
+## Compile the binary to bin/systemd-exporter.
 build:
 	go build -o bin/$(BIN) ./cmd/$(BIN)
-
-## Compile with full journal support (requires libsystemd-dev installed).
-build-journal:
-	go build -tags journal -o bin/$(BIN) ./cmd/$(BIN)
 
 ## Run unit tests.
 test:
