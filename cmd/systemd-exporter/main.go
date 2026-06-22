@@ -13,9 +13,10 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/JaKafka/systemd-exporter/internal/systemd"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/JaKafka/systemd-exporter/internal/systemd"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=<tag>".

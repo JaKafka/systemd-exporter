@@ -23,3 +23,6 @@
 !/internal/
 !/internal/**/
 !/internal/**/*.go
+!/docker/
+!/docker/**/
+!/docker/**/Dockerfile
