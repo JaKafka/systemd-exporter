@@ -179,10 +179,12 @@ pre-commit install
 | --- | --- |
 | `make build` | Compile binary |
 | `make test` | Run unit tests |
-| `make test-integration` | Run integration tests (requires running systemd) |
+| `make test-integration` | Run integration tests against the host's systemd (requires a running systemd instance) |
+| `make test-integration-docker` | Run integration tests inside a disposable container that boots a real systemd |
+| `make coverage` | Merge unit + integration coverage and print the per-function breakdown |
 | `make lint` | Run `golangci-lint` |
 | `make tidy` | Run `go mod tidy` |
-| `make clean` | Remove build artifacts |
+| `make clean` | Remove build and coverage artifacts |
 
 ### Testing
 

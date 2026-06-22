@@ -1,6 +1,7 @@
 package systemd
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -200,26 +201,184 @@ func TestUnitStateFromDBus(t *testing.T) {
 // WithNameFilter / WithUnitType options
 // ---------------------------------------------------------------------------
 
-func TestWithUnitType_FiltersRefresh(t *testing.T) {
-	units := map[string]*UnitState{
+func TestWithUnitType_SetsFilter(t *testing.T) {
+	c := &Collector{}
+	WithUnitType(".service")(c)
+
+	if c.filter == nil {
+		t.Fatal("expected filter to be set")
+	}
+	if !c.filter("a.service") {
+		t.Error("a.service should pass the filter")
+	}
+	if c.filter("b.device") {
+		t.Error("b.device should not pass the filter")
+	}
+}
+
+func TestWithNameFilter_SetsFilter(t *testing.T) {
+	c := &Collector{}
+	WithNameFilter(func(name string) bool { return strings.HasPrefix(name, "docker") })(c)
+
+	if !c.filter("docker.service") {
+		t.Error("docker.service should pass the filter")
+	}
+	if c.filter("sshd.service") {
+		t.Error("sshd.service should not pass the filter")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Collector read methods (no D-Bus connection required)
+// ---------------------------------------------------------------------------
+
+func newTestCollector(units map[string]*UnitState) *Collector {
+	c := &Collector{}
+	c.snapshot = Snapshot{
+		Units: units,
+		Stats: computeStats(units),
+	}
+	return c
+}
+
+func TestCollector_Snapshot(t *testing.T) {
+	c := newTestCollector(map[string]*UnitState{
+		"a.service": {Name: "a.service", ActiveState: "active"},
+	})
+
+	snap := c.Snapshot()
+	if snap.Stats.Total != 1 {
+		t.Errorf("Stats.Total=%d, want 1", snap.Stats.Total)
+	}
+
+	// Mutating the returned snapshot must not affect the collector's state.
+	snap.Units["a.service"].ActiveState = "failed"
+	if c.snapshot.Units["a.service"].ActiveState != "active" {
+		t.Error("Snapshot() did not deep-copy units; mutation leaked into collector state")
+	}
+}
+
+func TestCollector_Stats(t *testing.T) {
+	c := newTestCollector(map[string]*UnitState{
 		"a.service": {ActiveState: "active"},
-		"b.device":  {ActiveState: "active"},
-		"c.service": {ActiveState: "failed"},
+		"b.service": {ActiveState: "failed"},
+	})
+
+	stats := c.Stats()
+	if stats.Total != 2 || stats.Active != 1 || stats.Failed != 1 {
+		t.Errorf("Stats()=%+v, want Total=2 Active=1 Failed=1", stats)
+	}
+}
+
+func TestCollector_UnitState(t *testing.T) {
+	c := newTestCollector(map[string]*UnitState{
+		"a.service": {Name: "a.service", ActiveState: "active"},
+	})
+
+	u, ok := c.UnitState("a.service")
+	if !ok {
+		t.Fatal("expected a.service to be found")
+	}
+	if u.ActiveState != "active" {
+		t.Errorf("ActiveState=%q, want %q", u.ActiveState, "active")
 	}
 
-	// Simulate what refresh does with a filter.
-	filter := func(name string) bool { return strings.HasSuffix(name, ".service") }
-	filtered := make(map[string]*UnitState)
-	for name, u := range units {
-		if filter(name) {
-			filtered[name] = u
-		}
+	if _, ok := c.UnitState("missing.service"); ok {
+		t.Error("expected missing.service to be not found")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// applyUpdates
+// ---------------------------------------------------------------------------
+
+func TestCollector_ApplyUpdates_AddsAndUpdates(t *testing.T) {
+	c := newTestCollector(map[string]*UnitState{
+		"a.service": {Name: "a.service", ActiveState: "active"},
+	})
+
+	c.applyUpdates(map[string]*dbus.UnitStatus{
+		"a.service": {Name: "a.service", ActiveState: "failed"},
+		"b.service": {Name: "b.service", ActiveState: "active"},
+	})
+
+	snap := c.Snapshot()
+	if snap.Stats.Total != 2 {
+		t.Fatalf("Stats.Total=%d, want 2", snap.Stats.Total)
+	}
+	if u, _ := c.UnitState("a.service"); u.ActiveState != "failed" {
+		t.Errorf("a.service ActiveState=%q, want %q", u.ActiveState, "failed")
+	}
+	if _, ok := c.UnitState("b.service"); !ok {
+		t.Error("expected b.service to be added")
+	}
+}
+
+func TestCollector_ApplyUpdates_RemovesUnit(t *testing.T) {
+	c := newTestCollector(map[string]*UnitState{
+		"a.service": {Name: "a.service", ActiveState: "active"},
+	})
+
+	c.applyUpdates(map[string]*dbus.UnitStatus{
+		"a.service": nil,
+	})
+
+	if _, ok := c.UnitState("a.service"); ok {
+		t.Error("expected a.service to be removed")
+	}
+	if c.Snapshot().Stats.Total != 0 {
+		t.Errorf("Stats.Total=%d, want 0", c.Snapshot().Stats.Total)
+	}
+}
+
+func TestCollector_ApplyUpdates_RespectsFilter(t *testing.T) {
+	c := newTestCollector(nil)
+	WithUnitType(".service")(c)
+
+	c.applyUpdates(map[string]*dbus.UnitStatus{
+		"a.service": {Name: "a.service", ActiveState: "active"},
+		"b.device":  {Name: "b.device", ActiveState: "active"},
+	})
+
+	if _, ok := c.UnitState("a.service"); !ok {
+		t.Error("expected a.service to pass the filter")
+	}
+	if _, ok := c.UnitState("b.device"); ok {
+		t.Error("expected b.device to be filtered out")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// New
+// ---------------------------------------------------------------------------
+
+func TestNew_CancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := New(ctx); err == nil {
+		t.Error("expected New() to fail with an already-cancelled context")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot
+// ---------------------------------------------------------------------------
+
+func TestCollector_Snapshot_SkipsNilUnits(t *testing.T) {
+	c := &Collector{}
+	c.snapshot = Snapshot{
+		Units: map[string]*UnitState{
+			"a.service": {Name: "a.service", ActiveState: "active"},
+			"b.service": nil,
+		},
 	}
 
-	if len(filtered) != 2 {
-		t.Errorf("expected 2 units after filter, got %d", len(filtered))
+	snap := c.Snapshot()
+	if _, ok := snap.Units["b.service"]; ok {
+		t.Error("expected nil unit to be skipped by Snapshot()")
 	}
-	if _, ok := filtered["b.device"]; ok {
-		t.Error("b.device should have been filtered out")
+	if len(snap.Units) != 1 {
+		t.Errorf("len(snap.Units)=%d, want 1", len(snap.Units))
 	}
 }
