@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,6 +14,8 @@ import (
 	"time"
 
 	"github.com/JaKafka/systemd-exporter/internal/systemd"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=<tag>".
@@ -19,6 +23,7 @@ var version = "dev"
 
 func main() {
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
+	listenAddr := flag.String("web.listen-address", ":9558", "address to expose the /metrics endpoint on")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -26,35 +31,61 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	switch flag.Arg(0) {
 	case "observe":
-		runObserve(flag.Args()[1:])
+		runObserveAll(ctx)
+	case "", "serve":
+		runServe(ctx, *listenAddr)
 	default:
-		// TODO(JK): add server here
-		slog.Error("server not implemented yet")
+		slog.Error("unknown command", "command", flag.Arg(0))
 		os.Exit(1)
 	}
 }
 
-func runObserve(args []string) {
-	fs := flag.NewFlagSet("observe", flag.ContinueOnError)
-	n := fs.Int("n", 50, "number of log lines to show (when observing a specific unit)")
-	if err := fs.Parse(args); err != nil {
-		slog.Error("parse flags", "err", err)
+func runServe(ctx context.Context, addr string) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	slog.Info("starting", "version", version)
+
+	collector, err := systemd.New(ctx)
+	if err != nil {
+		slog.Error("connect to systemd D-Bus", "err", err)
 		os.Exit(1)
 	}
+	defer collector.Close()
 
-	unit := fs.Arg(0)
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(systemd.NewExporter(collector))
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 
-	if unit != "" {
-		runObserveUnit(ctx, unit, *n)
-		return
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	runObserveAll(ctx)
+	go func() {
+		slog.Info("serving metrics", "addr", addr, "path", "/metrics")
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("http server", "err", err)
+			cancel()
+		}
+	}()
+
+	<-ctx.Done()
+	slog.Info("shutting down")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("graceful shutdown", "err", err)
+	}
 }
 
 func runObserveAll(ctx context.Context) {
@@ -86,47 +117,6 @@ func runObserveAll(ctx context.Context) {
 	slog.Info("running — press Ctrl+C to stop")
 	<-ctx.Done()
 	slog.Info("shutting down")
-}
-
-func runObserveUnit(ctx context.Context, unit string, n int) {
-	ch, err := systemd.StreamServiceLogs(ctx, unit, n)
-	if err != nil {
-		slog.Error("open journal", "unit", unit, "err", err)
-		os.Exit(1)
-	}
-
-	slog.Info("streaming logs — press Ctrl+C to stop", "unit", unit)
-
-	for entry := range ch {
-		fmt.Printf("%s  %-6s  %s\n",
-			entry.Timestamp.Format(time.RFC3339),
-			priorityName(entry.Priority),
-			entry.Message,
-		)
-	}
-}
-
-func priorityName(p int) string {
-	switch p {
-	case 0:
-		return "EMERG"
-	case 1:
-		return "ALERT"
-	case 2:
-		return "CRIT"
-	case 3:
-		return "ERR"
-	case 4:
-		return "WARN"
-	case 5:
-		return "NOTICE"
-	case 6:
-		return "INFO"
-	case 7:
-		return "DEBUG"
-	default:
-		return "UNKNOWN"
-	}
 }
 
 func parseLogLevel(s string) slog.Level {

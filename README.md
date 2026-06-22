@@ -15,7 +15,6 @@ the overhead on the running system minimal.
     - [Collector](#collector)
       - [Available statistics](#available-statistics)
       - [Caching strategy](#caching-strategy)
-    - [Service log access](#service-log-access)
   - [CLI](#cli)
     - [observe](#observe)
     - [Global flags](#global-flags)
@@ -39,11 +38,9 @@ systemd-exporter/
 │   └── systemd-exporter/   ← binary entry point (main package)
 │       └── main.go
 └── internal/
-    └── systemd/            ← D-Bus collector and journal log reader
-        ├── types.go        ← UnitState, Stats, Snapshot, LogEntry
-        ├── collector.go    ← Collector (caching, D-Bus subscription)
-        ├── logs.go         ← GetServiceLogs (journal reader, requires -tags journal)
-        └── logs_stub.go    ← GetServiceLogs stub when journal tag is absent
+    └── systemd/            ← D-Bus collector
+        ├── types.go        ← UnitState, Stats, Snapshot
+        └── collector.go    ← Collector (caching, D-Bus subscription)
 ```
 
 ---
@@ -51,7 +48,7 @@ systemd-exporter/
 ## systemd package (`internal/systemd`)
 
 This package is the core of the exporter. It is responsible for all
-communication with systemd via D-Bus and the journal.
+communication with systemd via D-Bus.
 
 ### Collector
 
@@ -110,24 +107,6 @@ The result is that `Collector.Snapshot()` is always a cheap read-lock with no
 D-Bus call, and the background goroutine touches D-Bus only once per second
 regardless of how many callers exist.
 
-### Service log access
-
-`GetServiceLogs` reads the systemd journal for a specific unit. Requires
-building with `-tags journal` and `libsystemd-dev` installed (see below).
-
-```go
-entries, err := systemd.GetServiceLogs("sshd.service", 50)
-for _, e := range entries {
-    fmt.Printf("[%s] %s\n", e.Timestamp.Format(time.RFC3339), e.Message)
-}
-```
-
-Each `LogEntry` contains `Timestamp`, `Priority` (syslog level 0–7),
-`Message`, and `Unit`.
-
-> **Note:** reading the journal requires membership in the `systemd-journal`
-> group or root privileges.
-
 ---
 
 ## CLI
@@ -137,7 +116,6 @@ systemd-exporter <command> [flags]
 
 Commands:
   observe              watch all unit states (stats + table)
-  observe <unit>       show journal logs for a specific unit
 ```
 
 ### observe
@@ -145,12 +123,6 @@ Commands:
 ```bash
 # all units — live stats and state table, runs until Ctrl+C
 systemd-exporter observe
-
-# journal logs for a unit (last 50 lines)
-systemd-exporter observe sshd.service
-
-# journal logs — custom line count
-systemd-exporter observe -n 100 docker.service
 ```
 
 ### Global flags
@@ -167,14 +139,10 @@ systemd-exporter observe -n 100 docker.service
 - **Go 1.23+**
 - `golangci-lint` ≥ v2.1.6 (development)
 - `pre-commit` (development)
-- `libsystemd-dev` (for journal log support)
 
 ```bash
 # golangci-lint
 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6
-
-# journal support headers (Debian/Ubuntu)
-sudo apt update && sudo apt install -y libsystemd-dev
 ```
 
 ---
@@ -186,8 +154,7 @@ sudo apt update && sudo apt install -y libsystemd-dev
 ```bash
 git clone https://github.com/JaKafka/systemd-exporter
 cd systemd-exporter
-make build           # no journal support
-make build-journal   # with journal support (requires libsystemd-dev)
+make build
 ```
 
 ### go install
@@ -210,8 +177,7 @@ pre-commit install
 
 | Command | Description |
 | --- | --- |
-| `make build` | Compile binary (no journal support) |
-| `make build-journal` | Compile with journal support (requires `libsystemd-dev`) |
+| `make build` | Compile binary |
 | `make test` | Run unit tests |
 | `make test-integration` | Run integration tests (requires running systemd) |
 | `make lint` | Run `golangci-lint` |

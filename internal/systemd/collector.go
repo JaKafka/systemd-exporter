@@ -92,6 +92,15 @@ func (c *Collector) Snapshot() Snapshot {
 	return snap
 }
 
+// Stats returns the aggregate counters from the current snapshot. Unlike
+// [Collector.Snapshot] it does not copy the per-unit map, so it is cheap enough
+// to call on every metrics scrape.
+func (c *Collector) Stats() Stats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.snapshot.Stats
+}
+
 // UnitState returns the state of a single named unit and whether it was found
 // in the current snapshot.
 func (c *Collector) UnitState(name string) (*UnitState, bool) {
